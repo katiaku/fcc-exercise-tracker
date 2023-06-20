@@ -13,7 +13,7 @@ const UserSchema = new Schema({
 });
 
 const ExerciseSchema = new Schema({
-  user_id: String,
+  _id: String,
   description: String,
   duration: Number,
   date: Date,
@@ -31,37 +31,54 @@ app.get('/', (req, res) => {
 
 app.post("/api/users", async (req, res) => {
   try {
+    const { username } = req.body;
     const userObj = new User({
-      username: req.body.username
+      username: username
     });
     const user = await userObj.save();
-    res.json(user)
+    res.json({
+      username: user.username,
+      _id: user._id
+    })
   } catch(err) {
     res.send({msg: 'Error'})
   }
 });
 
 app.get('/api/users', async (req, res) => {
-  const users = await User.find({}).select("_id username");
-  if (!users) return res.json({ message: 'User not found' });
-  res.json(users)
+  try {
+    const users = await User.find({}, '_id username');
+    const userArray = users.map(user => ({
+      username: user.username,
+      _id: user._id
+    }));
+    res.json(userArray);
+  } catch(err) {
+    res.send({ msg: 'Error' });
+  }
 });
 
 app.post('/api/users/:_id/exercises', async (req, res) => {
   try {
     const { description, duration, date } = req.body;
-    const user = await User.findById(req.params._id);
-    if (!user) return res.json({msg: 'User not found'});
-    const exercise = await Exercise.create({user_id: user._id, description, duration, date: date ? new Date(date) : new Date()});
-    res.json({
-      _id: user._id,
-      username: user.username,
-      description: exercise.description,
-      duration: exercise.duration,
-      date: new Date(exercise.date).toDateString()
-    })
-  } catch(err) {
-    res.send({msg: 'Error'})
+    const userId = req.params._id;
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.json({ msg: 'User not found' });
+    }
+    const exercise = new Exercise({
+      user_id: userId,
+      description,
+      duration,
+      date: date ? new Date(date) : new Date()
+    });
+    await exercise.save();
+    user.exercises.push(exercise);
+    await user.save();
+    res.json(user);
+
+  } catch (err) {
+    res.send({ msg: 'Error' });
   }
 });
 
@@ -70,22 +87,34 @@ app.get('/api/users/:_id/logs', async (req, res) => {
   const userId = req.params._id;
   try {
     const user = await User.findById(userId);
-    if (!user) throw new Error("User not found");
-    const filter = { user_id: userId };
-    if (from) filter.date = { $gte: new Date(from) }
-    if (to) filter.date = { ...filter.date, $lte: new Date(to) }
-    const exercises = await Exercise.find(filter).limit(+limit);
-    const logs = exercises.map(({ description, duration, date }) => ({
+    if (!user) {
+      throw new Error('User not found');
+    }
+    const query = { user_id: userId };
+    if (from) {
+      query.date = { $gte: new Date(from) };
+    }
+    if (to) {
+      query.date = { ...query.date, $lte: new Date(to) };
+    }
+    let exerciseQuery = Exercise.find(query);
+    if (limit) {
+      exerciseQuery = exerciseQuery.limit(parseInt(limit, 10));
+    }
+    const exercises = await exerciseQuery.exec();
+    const exerciseLog = exercises.map(({ description, duration, date }) => ({
       description,
       duration,
-      date: date.toDateString()
+      date: date.toDateString(),
     }));
-    res.json({
+    const count = exercises.length;
+    const userWithLog = {
       _id: user._id,
       username: user.username,
-      count: exercises.length,
-      log: logs
-    })
+      count: count,
+      log: exerciseLog,
+    };
+    res.json(userWithLog);
   } catch (err) {
     res.json({ error: err.message })
   }
